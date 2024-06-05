@@ -203,7 +203,7 @@ if __name__ == "__main__":
     peer_dropdown.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
     send_button = tk.Button(frame, text="Send", command=None)
-    send_button.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+    send_button.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
 
     root.grid_rowconfigure(1, weight=1)
     root.grid_columnconfigure(0, weight=1)
