@@ -8,28 +8,27 @@ import time
 # Timeout duration for waiting for ACK in seconds
 ACK_TIMEOUT = 2
 
-def receive_messages(sock, display_area, ack_received_event, expected_ack_message):
+def receive_messages(sock, display_area, ack_received_event):
     while True:
         try:
             message, addr = sock.recvfrom(1024)
             decoded_message = message.decode('utf-8')
 
-            if decoded_message.startswith("ACK"):
+            if decoded_message.startswith("ACK:"):
                 # Handle the ACK message
-                if decoded_message == expected_ack_message:
-                    ack_received_event.set()
+                ack_received_event.set()
             else:
                 display_area.config(state=tk.NORMAL)
                 display_area.insert(tk.END, f"{decoded_message}\n")
                 display_area.yview(tk.END)
                 display_area.config(state=tk.DISABLED)
                 # Send back an ACK to the sender
-                ack_message = f"ACK: {decoded_message}"
+                ack_message = f"ACK:{decoded_message}"
                 sock.sendto(ack_message.encode('utf-8'), addr)
         except:
             break
 
-def send_messages(sock, peer_ip, peer_port, local_callsign, message_entry, display_area, ack_received_event, expected_ack_message):
+def send_messages(sock, peer_ip, peer_port, local_callsign, message_entry, display_area, ack_received_event):
     message = message_entry.get()
     if message:
         msg_with_callsign = f"{local_callsign}: {message}"
@@ -58,9 +57,8 @@ def send_messages(sock, peer_ip, peer_port, local_callsign, message_entry, displ
 
 def start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown):
     ack_received_event = threading.Event()
-    expected_ack_message = f"ACK: {local_callsign}"
 
-    threading.Thread(target=receive_messages, args=(sock, display_area, ack_received_event, expected_ack_message)).start()
+    threading.Thread(target=receive_messages, args=(sock, display_area, ack_received_event)).start()
 
     def send_button_command(event=None):
         send_messages(
@@ -70,8 +68,7 @@ def start_peer(sock, local_callsign, peer_info, display_area, message_entry, pee
             local_callsign,
             message_entry,
             display_area,
-            ack_received_event,
-            expected_ack_message
+            ack_received_event
         )
 
     send_button = tk.Button(root, text="Send", command=send_button_command)
