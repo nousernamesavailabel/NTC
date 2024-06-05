@@ -1,0 +1,3 @@
+address,port,callsign
+10.0.0.250,1234,radar1
+10.0.0.254,1234,radar2
