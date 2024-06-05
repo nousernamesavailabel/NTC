@@ -4,6 +4,76 @@ import csv
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 import time
+import os
+from tkinter import filedialog
+
+def tftp_server(sock, storage_directory="tftp_storage"):
+    if not os.path.exists(storage_directory):
+        os.makedirs(storage_directory)
+
+    while True:
+        data, addr = sock.recvfrom(516)  # TFTP packets are 512 bytes of data + 4 bytes header
+        if not data:
+            break
+
+        opcode = data[:2]
+        filename = data[2:-1].decode('ascii')
+        mode = data[-1]
+
+        if opcode == b'\x00\x01':  # Read request (RRQ)
+            filepath = os.path.join(storage_directory, filename)
+            if os.path.exists(filepath):
+                with open(filepath, 'rb') as file:
+                    block_number = 1
+                    while True:
+                        block = file.read(512)
+                        if not block:
+                            break
+                        packet = b'\x00\x03' + block_number.to_bytes(2, 'big') + block
+                        sock.sendto(packet, addr)
+                        block_number += 1
+            else:
+                # Send error packet (file not found)
+                error_packet = b'\x00\x05\x00\x01File not found\x00'
+                sock.sendto(error_packet, addr)
+
+
+def tftp_client(sock, filename, server_address):
+    rrq = b'\x00\x01' + filename.encode('ascii') + b'\x00octet\x00'
+    sock.sendto(rrq, server_address)
+
+    with open(filename, 'wb') as file:
+        while True:
+            data, addr = sock.recvfrom(516)
+            if not data:
+                break
+
+            opcode = data[:2]
+            block_number = data[2:4]
+            block_data = data[4:]
+
+            if opcode == b'\x00\x03':  # Data packet
+                file.write(block_data)
+                ack = b'\x00\x04' + block_number
+                sock.sendto(ack, addr)
+
+                if len(block_data) < 512:
+                    break
+            elif opcode == b'\x00\x05':  # Error packet
+                print("Error:", data[4:].decode('ascii'))
+                break
+
+def select_file():
+    file_path = filedialog.askopenfilename()
+    return file_path
+
+def start_tftp_server(sock):
+    threading.Thread(target=tftp_server, args=(sock,)).start()
+
+def send_file():
+    file_path = select_file()
+    if file_path:
+        tftp_client(sock, file_path, (server_ip, server_port))
 
 def receive_messages(sock, display_area, ack_received_event, stop_event):
     while not stop_event.is_set():
@@ -207,5 +277,11 @@ if __name__ == "__main__":
 
     root.grid_rowconfigure(1, weight=1)
     root.grid_columnconfigure(0, weight=1)
+
+    tftp_server_button = tk.Button(root, text="Start TFTP Server", command=start_tftp_server)
+    tftp_server_button.grid(row=3, column=3, padx=5, pady=5, sticky="ew")
+
+    send_file_button = tk.Button(root, text="Send File", command=send_file)
+    send_file_button.grid(row=3, column=4, padx=5, pady=5, sticky="ew")
 
     root.mainloop()
