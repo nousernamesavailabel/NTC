@@ -1,33 +1,95 @@
 import socket
 import threading
 import csv
+import tkinter as tk
+from tkinter import scrolledtext, ttk
+import time
 
+# Timeout duration for waiting for ACK in seconds
+ACK_TIMEOUT = 2
 
-def receive_messages(sock):
+def receive_messages(sock, display_area):
     while True:
         try:
             message, addr = sock.recvfrom(1024)
-            print(f"\n{message.decode('utf-8')}")
+            if message.startswith(b"ACK"):
+                # Handle the ACK message
+                ack_message = message.decode('utf-8')
+                print(f"Received ACK: {ack_message}")
+            else:
+                display_area.config(state=tk.NORMAL)
+                display_area.insert(tk.END, f"{message.decode('utf-8')}\n")
+                display_area.yview(tk.END)
+                display_area.config(state=tk.DISABLED)
+                # Send back an ACK to the sender
+                ack_message = f"ACK: {message.decode('utf-8')}"
+                sock.sendto(ack_message.encode('utf-8'), addr)
         except:
             break
 
+def send_messages(sock, peer_ip, peer_port, local_callsign, message_entry, display_area):
+    message = message_entry.get()
+    if message:
+        msg_with_callsign = f"{local_callsign}: {message}"
+        sock.sendto(msg_with_callsign.encode('utf-8'), (peer_ip, peer_port))
 
-def send_messages(sock, peer_info, local_callsign):
-    while True:
-        message = input()
-        for peer_ip, peer_port, peer_callsign in peer_info:
-            sock.sendto(f"{local_callsign}: {message}".encode('utf-8'), (peer_ip, int(peer_port)))
+        # Wait for ACK
+        sock.settimeout(ACK_TIMEOUT)
+        try:
+            ack_message, addr = sock.recvfrom(1024)
+            if ack_message.decode('utf-8').startswith("ACK"):
+                display_area.config(state=tk.NORMAL)
+                display_area.insert(tk.END, f"You: {message}\n")
+                display_area.yview(tk.END)
+                display_area.config(state=tk.DISABLED)
+        except socket.timeout:
+            print("No ACK received, message might be lost.")
+        finally:
+            sock.settimeout(None)
+        message_entry.delete(0, tk.END)
 
+def start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown):
+    threading.Thread(target=receive_messages, args=(sock, display_area)).start()
 
-def start_peer(local_callsign, peer_info, local_port):
+    def send_button_command(event=None):
+        send_messages(
+            sock,
+            peer_info[peer_dropdown.current()][0],
+            int(peer_info[peer_dropdown.current()][1]),
+            local_callsign,
+            message_entry,
+            display_area
+        )
+
+    send_button = tk.Button(root, text="Send", command=send_button_command)
+    send_button.grid(row=3, column=2, padx=5, pady=5, sticky="ew")
+
+    message_entry.bind('<Return>', send_button_command)
+
+def on_save(local_callsign_var, peer_info, display_area, message_entry, peer_dropdown, save_button, callsign_dropdown):
+    selected_value = local_callsign_var.get()
+    local_callsign = selected_value.split(' ')[0]  # Get only the callsign part
+
+    local_port = int([port for addr, port, cs in peer_info if cs == local_callsign][0])
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(('0.0.0.0', local_port))
 
-    print(f"Connected to peers. Your callsign is {local_callsign}")
+    display_area.config(state=tk.NORMAL)
+    display_area.insert(tk.END, f"Chat online. Your callsign is {local_callsign}\n")
+    display_area.config(state=tk.DISABLED)
 
-    threading.Thread(target=receive_messages, args=(sock,)).start()
-    threading.Thread(target=send_messages, args=(sock, peer_info, local_callsign)).start()
+    save_button.config(state=tk.DISABLED)
+    callsign_dropdown.config(state=tk.DISABLED)
 
+    # Remove the local peer from the peer_info list
+    peer_info = [info for info in peer_info if info[2] != local_callsign]
+
+    # Update the peer dropdown
+    peer_dropdown['values'] = [f"{callsign} ({address}:{port})" for address, port, callsign in peer_info]
+    peer_dropdown.current(0)
+
+    start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown)
 
 def read_addresses(file_name):
     peer_info = []
@@ -42,18 +104,49 @@ def read_addresses(file_name):
 
     return peer_info
 
-
 if __name__ == "__main__":
     peer_info = read_addresses('addresses.csv')
 
-    print("Available callsigns:")
-    for idx, (address, _, callsign) in enumerate(peer_info):
-        print(f"{idx + 1}. {callsign} : {address}")
+    root = tk.Tk()
+    root.title("Peer-to-Peer Chat")
 
-    local_index = int(input("Enter the number corresponding to your callsign: ")) - 1
-    local_callsign, local_port = peer_info[local_index][2], int(peer_info[local_index][1])
+    top_frame = tk.Frame(root)
+    top_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
-    # Remove the local peer from the peer_info list
-    peer_info = [info for info in peer_info if info[2] != local_callsign]
+    my_station_label = tk.Label(top_frame, text="My Station:")
+    my_station_label.grid(row=0, column=0, padx=10, pady=10)
 
-    start_peer(local_callsign, peer_info, local_port)
+    local_callsign_var = tk.StringVar()
+    callsign_dropdown = ttk.Combobox(top_frame, textvariable=local_callsign_var, state="readonly")
+    callsign_dropdown['values'] = [f"{callsign} ({address})" for address, _, callsign in peer_info]
+    callsign_dropdown.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+    save_button = tk.Button(top_frame, text="Save", command=lambda: on_save(
+        local_callsign_var,
+        peer_info,
+        display_area,
+        message_entry,
+        peer_dropdown,
+        save_button,
+        callsign_dropdown
+    ))
+    save_button.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+
+    display_area = scrolledtext.ScrolledText(root, wrap=tk.WORD, state=tk.DISABLED)
+    display_area.grid(row=1, column=0, padx=10, pady=10, columnspan=3, sticky="nsew")
+
+    frame = tk.Frame(root)
+    frame.grid(row=2, column=0, padx=10, pady=10, columnspan=3, sticky="ew")
+
+    message_entry = tk.Entry(frame, width=50)
+    message_entry.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+
+    peer_dropdown = ttk.Combobox(frame, state="readonly", width=25)
+    peer_dropdown['values'] = [f"{callsign} ({address}:{port})" for address, port, callsign in peer_info]
+    peer_dropdown.current(0)
+    peer_dropdown.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+    root.grid_rowconfigure(1, weight=1)
+    root.grid_columnconfigure(0, weight=1)
+
+    root.mainloop()
