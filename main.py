@@ -8,48 +8,59 @@ import time
 # Timeout duration for waiting for ACK in seconds
 ACK_TIMEOUT = 2
 
-def receive_messages(sock, display_area):
+def receive_messages(sock, display_area, ack_received_event, expected_ack_message):
     while True:
         try:
             message, addr = sock.recvfrom(1024)
-            if message.startswith(b"ACK"):
+            decoded_message = message.decode('utf-8')
+
+            if decoded_message.startswith("ACK"):
                 # Handle the ACK message
-                ack_message = message.decode('utf-8')
-                print(f"Received ACK: {ack_message}")
+                if decoded_message == expected_ack_message:
+                    ack_received_event.set()
             else:
                 display_area.config(state=tk.NORMAL)
-                display_area.insert(tk.END, f"{message.decode('utf-8')}\n")
+                display_area.insert(tk.END, f"{decoded_message}\n")
                 display_area.yview(tk.END)
                 display_area.config(state=tk.DISABLED)
                 # Send back an ACK to the sender
-                ack_message = f"ACK: {message.decode('utf-8')}"
+                ack_message = f"ACK: {decoded_message}"
                 sock.sendto(ack_message.encode('utf-8'), addr)
         except:
             break
 
-def send_messages(sock, peer_ip, peer_port, local_callsign, message_entry, display_area):
+def send_messages(sock, peer_ip, peer_port, local_callsign, message_entry, display_area, ack_received_event, expected_ack_message):
     message = message_entry.get()
     if message:
         msg_with_callsign = f"{local_callsign}: {message}"
         sock.sendto(msg_with_callsign.encode('utf-8'), (peer_ip, peer_port))
 
         # Wait for ACK
-        sock.settimeout(ACK_TIMEOUT)
-        try:
-            ack_message, addr = sock.recvfrom(1024)
-            if ack_message.decode('utf-8').startswith("ACK"):
+        ack_received_event.clear()
+        start_time = time.time()
+
+        while not ack_received_event.is_set():
+            if time.time() - start_time > ACK_TIMEOUT:
                 display_area.config(state=tk.NORMAL)
-                display_area.insert(tk.END, f"You: {message}\n")
+                display_area.insert(tk.END, "No ACK received, message might be lost.\n")
                 display_area.yview(tk.END)
                 display_area.config(state=tk.DISABLED)
-        except socket.timeout:
-            print("No ACK received, message might be lost.")
-        finally:
-            sock.settimeout(None)
+                break
+            time.sleep(0.1)
+
+        if ack_received_event.is_set():
+            display_area.config(state=tk.NORMAL)
+            display_area.insert(tk.END, f"You: {message}\n")
+            display_area.yview(tk.END)
+            display_area.config(state=tk.DISABLED)
+
         message_entry.delete(0, tk.END)
 
 def start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown):
-    threading.Thread(target=receive_messages, args=(sock, display_area)).start()
+    ack_received_event = threading.Event()
+    expected_ack_message = f"ACK: {local_callsign}"
+
+    threading.Thread(target=receive_messages, args=(sock, display_area, ack_received_event, expected_ack_message)).start()
 
     def send_button_command(event=None):
         send_messages(
@@ -58,7 +69,9 @@ def start_peer(sock, local_callsign, peer_info, display_area, message_entry, pee
             int(peer_info[peer_dropdown.current()][1]),
             local_callsign,
             message_entry,
-            display_area
+            display_area,
+            ack_received_event,
+            expected_ack_message
         )
 
     send_button = tk.Button(root, text="Send", command=send_button_command)
