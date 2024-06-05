@@ -5,8 +5,8 @@ import tkinter as tk
 from tkinter import scrolledtext, ttk
 import time
 
-def receive_messages(sock, display_area, ack_received_event):
-    while True:
+def receive_messages(sock, display_area, ack_received_event, stop_event):
+    while not stop_event.is_set():
         try:
             message, addr = sock.recvfrom(1024)
             decoded_message = message.decode('utf-8')
@@ -22,7 +22,7 @@ def receive_messages(sock, display_area, ack_received_event):
                 # Send back an ACK to the sender with the first four characters of the message
                 ack_message = f"ACK:{decoded_message[:4]}"
                 sock.sendto(ack_message.encode('utf-8'), addr)
-        except:
+        except socket.error:
             break
 
 def send_messages(sock, peer_ip, peer_port, local_callsign, message_entry, display_area, ack_received_event, send_button, ack_timeout, recipient_callsign):
@@ -67,10 +67,10 @@ def send_messages(sock, peer_ip, peer_port, local_callsign, message_entry, displ
 
         message_entry.delete(0, tk.END)
 
-def start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown, send_button, ack_timeout):
+def start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown, send_button, ack_timeout, stop_event):
     ack_received_event = threading.Event()
 
-    threading.Thread(target=receive_messages, args=(sock, display_area, ack_received_event)).start()
+    threading.Thread(target=receive_messages, args=(sock, display_area, ack_received_event, stop_event)).start()
 
     def send_button_command(event=None):
         recipient_info = peer_info[peer_dropdown.current()]
@@ -91,7 +91,7 @@ def start_peer(sock, local_callsign, peer_info, display_area, message_entry, pee
     send_button.config(command=send_button_command)
     message_entry.bind('<Return>', send_button_command)
 
-def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, display_area, message_entry, peer_dropdown, save_button, callsign_dropdown, send_button):
+def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, display_area, message_entry, peer_dropdown, save_button, callsign_dropdown, send_button, stop_event):
     selected_value = local_callsign_var.get()
     local_callsign = selected_value.split(' ')[0]  # Get only the callsign part
 
@@ -117,7 +117,10 @@ def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, 
     peer_dropdown['values'] = [f"{callsign} ({address}:{port})" for address, port, callsign in peer_info]
     peer_dropdown.current(0)
 
-    start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown, send_button, ack_timeout)
+    start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown, send_button, ack_timeout, stop_event)
+
+    # Ensure sock is passed to on_closing
+    root.protocol("WM_DELETE_WINDOW", lambda: on_closing(root, sock, stop_event))
 
 def read_addresses(file_name):
     peer_info = []
@@ -131,6 +134,11 @@ def read_addresses(file_name):
             peer_info.append((address, port, callsign))
 
     return peer_info
+
+def on_closing(root, sock, stop_event):
+    stop_event.set()
+    sock.close()
+    root.destroy()
 
 if __name__ == "__main__":
     peer_info = read_addresses('addresses.csv')
@@ -163,6 +171,8 @@ if __name__ == "__main__":
     ack_timeout_entry.insert(0, "5")
     ack_timeout_entry.grid(row=0, column=5, padx=5, pady=5, sticky="ew")
 
+    stop_event = threading.Event()
+
     save_button = tk.Button(top_frame, text="Save", command=lambda: on_save(
         local_callsign_var,
         local_port_entry,
@@ -173,7 +183,8 @@ if __name__ == "__main__":
         peer_dropdown,
         save_button,
         callsign_dropdown,
-        send_button
+        send_button,
+        stop_event
     ))
     save_button.grid(row=0, column=6, padx=5, pady=5, sticky="ew")
 
@@ -192,7 +203,7 @@ if __name__ == "__main__":
     peer_dropdown.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
     send_button = tk.Button(frame, text="Send", command=None)
-    send_button.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+    send_button.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
 
     root.grid_rowconfigure(1, weight=1)
     root.grid_columnconfigure(0, weight=1)
