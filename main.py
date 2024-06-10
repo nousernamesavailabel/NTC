@@ -37,13 +37,13 @@ def tftp_server(sock, storage_directory="tftp_storage"):
                 sock.sendto(error_packet, addr)
 
 
-def tftp_client(sock, filename, server_address):
+def tftp_client(sock, filename, server_address, block_size=512):
     rrq = b'\x00\x01' + filename.encode('ascii') + b'\x00octet\x00'
     sock.sendto(rrq, server_address)
 
     with open(filename, 'wb') as file:
         while True:
-            data, addr = sock.recvfrom(516)
+            data, addr = sock.recvfrom(block_size + 4)
             if not data:
                 break
 
@@ -56,7 +56,7 @@ def tftp_client(sock, filename, server_address):
                 ack = b'\x00\x04' + block_number
                 sock.sendto(ack, addr)
 
-                if len(block_data) < 512:
+                if len(block_data) < block_size:
                     break
             elif opcode == b'\x00\x05':  # Error packet
                 print("Error:", data[4:].decode('ascii'))
@@ -71,7 +71,8 @@ def send_file():
     if file_path:
         server_ip = peer_info[peer_dropdown.current()][0]
         server_port = 69
-        tftp_client(sock, file_path, (server_ip, server_port))
+        block_size = int(block_size_dropdown.get())
+        tftp_client(sock, file_path, (server_ip, server_port), block_size)
 
 def receive_messages(sock, display_area, ack_received_event, stop_event):
     while not stop_event.is_set():
@@ -218,7 +219,7 @@ if __name__ == "__main__":
     peer_info = read_addresses('addresses.csv')
 
     root = tk.Tk()
-    root.title("Peer-to-Peer Chat")
+    root.title("Not Tactical Chat IP")
 
     top_frame = tk.Frame(root)
     top_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
@@ -280,7 +281,14 @@ if __name__ == "__main__":
     send_button.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
 
     send_file_button = tk.Button(frame, text="Send File", command=send_file)
-    send_file_button.grid(row=1, column=3, padx=5, pady=5, sticky="ew")
+    send_file_button.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
+
+    block_size_label = tk.Label(frame, text="Block Size:")
+    block_size_label.grid(row=0, column=4, padx=10, pady=10)
+
+    block_size_dropdown = ttk.Combobox(frame, state="readonly", values=[64,128,256,512, 1024, 2048, 4096])
+    block_size_dropdown.current(0)
+    block_size_dropdown.grid(row=0, column=5, padx=5, pady=5, sticky="ew")
 
     root.grid_rowconfigure(1, weight=1)
     root.grid_columnconfigure(0, weight=1)
