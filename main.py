@@ -2,10 +2,9 @@ import socket
 import threading
 import csv
 import tkinter as tk
-from tkinter import scrolledtext, ttk
+from tkinter import scrolledtext, ttk, filedialog
 import time
 import os
-from tkinter import filedialog
 
 def tftp_server(sock, storage_directory="tftp_storage"):
     if not os.path.exists(storage_directory):
@@ -67,12 +66,16 @@ def select_file():
     file_path = filedialog.askopenfilename()
     return file_path
 
-def start_tftp_server(sock):
-    threading.Thread(target=tftp_server, args=(sock,)).start()
+def start_tftp_server():
+    tftp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    tftp_sock.bind(('0.0.0.0', 69))
+    threading.Thread(target=tftp_server, args=(tftp_sock,)).start()
 
 def send_file():
     file_path = select_file()
     if file_path:
+        server_ip = peer_info[peer_dropdown.current()][0]
+        server_port = 69
         tftp_client(sock, file_path, (server_ip, server_port))
 
 def receive_messages(sock, display_area, ack_received_event, stop_event):
@@ -162,6 +165,7 @@ def start_peer(sock, local_callsign, peer_info, display_area, message_entry, pee
     message_entry.bind('<Return>', send_button_command)
 
 def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, display_area, message_entry, peer_dropdown, save_button, callsign_dropdown, send_button, stop_event):
+    global sock
     selected_value = local_callsign_var.get()
     local_callsign = selected_value.split(' ')[0]  # Get only the callsign part
 
@@ -275,13 +279,13 @@ if __name__ == "__main__":
     send_button = tk.Button(frame, text="Send", command=None)
     send_button.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
 
+    tftp_server_button = tk.Button(frame, text="Start TFTP Server", command=start_tftp_server)
+    tftp_server_button.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
+
+    send_file_button = tk.Button(frame, text="Send File", command=send_file)
+    send_file_button.grid(row=1, column=3, padx=5, pady=5, sticky="ew")
+
     root.grid_rowconfigure(1, weight=1)
     root.grid_columnconfigure(0, weight=1)
-
-    tftp_server_button = tk.Button(root, text="Start TFTP Server", command=start_tftp_server)
-    tftp_server_button.grid(row=3, column=3, padx=5, pady=5, sticky="ew")
-
-    send_file_button = tk.Button(root, text="Send File", command=send_file)
-    send_file_button.grid(row=3, column=4, padx=5, pady=5, sticky="ew")
 
     root.mainloop()
