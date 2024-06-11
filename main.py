@@ -6,73 +6,124 @@ from tkinter import scrolledtext, ttk, filedialog
 import time
 import os
 
+selected_file_path = ""
+
 def tftp_server(sock, storage_directory="tftp_storage"):
     if not os.path.exists(storage_directory):
         os.makedirs(storage_directory)
 
     while True:
-        data, addr = sock.recvfrom(516)  # TFTP packets are 512 bytes of data + 4 bytes header
-        if not data:
-            break
-
-        opcode = data[:2]
-        filename = data[2:-1].decode('ascii')
-        mode = data[-1]
-
-        if opcode == b'\x00\x01':  # Read request (RRQ)
-            filepath = os.path.join(storage_directory, filename)
-            if os.path.exists(filepath):
-                with open(filepath, 'rb') as file:
-                    block_number = 1
-                    while True:
-                        block = file.read(512)
-                        if not block:
-                            break
-                        packet = b'\x00\x03' + block_number.to_bytes(2, 'big') + block
-                        sock.sendto(packet, addr)
-                        block_number += 1
-            else:
-                # Send error packet (file not found)
-                error_packet = b'\x00\x05\x00\x01File not found\x00'
-                sock.sendto(error_packet, addr)
-
-
-def tftp_client(sock, filename, server_address, block_size=512):
-    rrq = b'\x00\x01' + filename.encode('ascii') + b'\x00octet\x00'
-    sock.sendto(rrq, server_address)
-
-    with open(filename, 'wb') as file:
-        while True:
-            data, addr = sock.recvfrom(block_size + 4)
+        try:
+            data, addr = sock.recvfrom(516)  # TFTP packets are 512 bytes of data + 4 bytes header
             if not data:
                 break
 
             opcode = data[:2]
-            block_number = data[2:4]
-            block_data = data[4:]
+            filename = data[2:].split(b'\x00')[0].decode('ascii')
+            mode = data[2 + len(filename) + 1:].split(b'\x00')[0].decode('ascii')
 
-            if opcode == b'\x00\x03':  # Data packet
-                file.write(block_data)
-                ack = b'\x00\x04' + block_number
-                sock.sendto(ack, addr)
+            print(f"Received WRQ: filename={filename}, mode={mode}, from={addr}")
 
-                if len(block_data) < block_size:
+            if opcode == b'\x00\x02':  # Write request (WRQ)
+                filepath = os.path.join(storage_directory, filename)
+                with open(filepath, 'wb') as file:
+                    block_number = 0
+                    while True:
+                        ack = b'\x00\x04' + block_number.to_bytes(2, 'big')
+                        sock.sendto(ack, addr)
+                        print(f"Sent ACK for block {block_number} to {addr}")
+
+                        data, addr = sock.recvfrom(516)
+                        if not data:
+                            break
+
+                        opcode = data[:2]
+                        recv_block_number = int.from_bytes(data[2:4], 'big')
+                        block_data = data[4:]
+
+                        print(f"Received packet: opcode={opcode}, block_number={recv_block_number}, from={addr}")
+
+                        if opcode == b'\x00\x03' and recv_block_number == block_number + 1:
+                            file.write(block_data)
+                            block_number += 1
+                            print(f"Received block {block_number} of {filename} from {addr}")
+
+                            if len(block_data) < 512:
+                                print(f"File transfer complete for {filename}")
+                                # Send final ACK
+                                ack = b'\x00\x04' + block_number.to_bytes(2, 'big')
+                                sock.sendto(ack, addr)
+                                print(f"Sent final ACK for block {block_number} to {addr}")
+                                break
+        except Exception as e:
+            print(f"Error in TFTP server: {e}")
+
+
+
+def tftp_client(sock, filename, server_address, block_size=512):
+    try:
+        wrq = b'\x00\x02' + os.path.basename(filename).encode('ascii') + b'\x00octet\x00'
+        sock.sendto(wrq, server_address)
+        print(f"Sent WRQ for {filename} to {server_address}")
+
+        with open(filename, 'rb') as file:
+            total_size = 0
+            block_number = 0
+            while True:
+                block = file.read(block_size)
+                if not block:
                     break
-            elif opcode == b'\x00\x05':  # Error packet
-                print("Error:", data[4:].decode('ascii'))
-                break
+                total_size += len(block)
+                status_bar.config(text=f"Sent {total_size} bytes")
+                block_number += 1
+                packet = b'\x00\x03' + block_number.to_bytes(2, 'big') + block
+                sock.sendto(packet, server_address)
+                print(f"Sent block {block_number} of {filename} to {server_address}")
+
+                while True:
+                    ack, _ = sock.recvfrom(4)
+                    if ack[:2] == b'\x00\x04' and int.from_bytes(ack[2:], 'big') == block_number:
+                        print(f"Received ACK for block {block_number}")
+                        break
+                    else:
+                        print(f"Incorrect ACK received, retransmitting block {block_number}")
+                        sock.sendto(packet, server_address)
+
+            # If the last block is less than the block size, it indicates the end of the file.
+            if len(block) == block_size:
+                block_number += 1
+                packet = b'\x00\x03' + block_number.to_bytes(2, 'big') + b''
+                sock.sendto(packet, server_address)
+                print(f"Sent final block {block_number} of {filename} to {server_address}")
+
+                while True:
+                    ack, _ = sock.recvfrom(4)
+                    if ack[:2] == b'\x00\x04' and int.from_bytes(ack[2:], 'big') == block_number:
+                        print(f"Received final ACK for block {block_number}")
+                        break
+
+            status_bar.config(text="File transfer complete")
+            print(f"File transfer complete for {filename}")
+    except Exception as e:
+        print(f"Error in TFTP client: {e}")
+
+
 
 def select_file():
-    file_path = filedialog.askopenfilename()
-    return file_path
+    global selected_file_path
+    selected_file_path = filedialog.askopenfilename()
+    status_bar.config(text=f"Selected file: {selected_file_path}")
+    print(f"Selected file: {selected_file_path}")
+    return selected_file_path
 
 def send_file():
-    file_path = select_file()
-    if file_path:
+    if selected_file_path:
         server_ip = peer_info[peer_dropdown.current()][0]
         server_port = 69
         block_size = int(block_size_dropdown.get())
-        tftp_client(sock, file_path, (server_ip, server_port), block_size)
+        status_bar.config(text="Starting file transfer...")
+        print(f"Starting file transfer to {server_ip}:{server_port} with block size {block_size}")
+        threading.Thread(target=tftp_client, args=(sock, selected_file_path, (server_ip, server_port), block_size)).start()
 
 def receive_messages(sock, display_area, ack_received_event, stop_event):
     while not stop_event.is_set():
@@ -219,7 +270,7 @@ if __name__ == "__main__":
     peer_info = read_addresses('addresses.csv')
 
     root = tk.Tk()
-    root.title("Not Tactical Chat IP")
+    root.title("Peer-to-Peer Chat")
 
     top_frame = tk.Frame(root)
     top_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
@@ -280,15 +331,21 @@ if __name__ == "__main__":
     send_button = tk.Button(frame, text="Send", command=None)
     send_button.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
 
+    select_file_button = tk.Button(frame, text="Select File", command=select_file)
+    select_file_button.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
+
     send_file_button = tk.Button(frame, text="Send File", command=send_file)
-    send_file_button.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
+    send_file_button.grid(row=1, column=3, padx=5, pady=5, sticky="ew")
 
     block_size_label = tk.Label(frame, text="Block Size:")
-    block_size_label.grid(row=0, column=4, padx=10, pady=10)
+    block_size_label.grid(row=1, column=4, padx=10, pady=10)
 
-    block_size_dropdown = ttk.Combobox(frame, state="readonly", values=[64,128,256,512, 1024, 2048, 4096])
-    block_size_dropdown.current(0)
-    block_size_dropdown.grid(row=0, column=5, padx=5, pady=5, sticky="ew")
+    block_size_dropdown = ttk.Combobox(frame, state="readonly", values=[16, 32, 64, 128, 256, 512, 1024, 2048, 4096])
+    block_size_dropdown.current(5)
+    block_size_dropdown.grid(row=1, column=5, padx=5, pady=5, sticky="ew")
+
+    status_bar = tk.Label(root, text="Status: Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+    status_bar.grid(row=3, column=0, columnspan=7, padx=5, pady=5, sticky="ew")
 
     root.grid_rowconfigure(1, weight=1)
     root.grid_columnconfigure(0, weight=1)
