@@ -9,9 +9,11 @@ import os
 selected_file_path = ""
 tftp_on = False
 stop_event = threading.Event()
+first_ack = True
 
 
-def tftp_server(sock, stop_event, storage_directory="tftp_storage", block_size=512):
+def tftp_server(sock, stop_event, display_area, storage_directory="tftp_storage", block_size=512):
+    global first_ack
     if not os.path.exists(storage_directory):
         os.makedirs(storage_directory)
 
@@ -26,12 +28,18 @@ def tftp_server(sock, stop_event, storage_directory="tftp_storage", block_size=5
             opcode = data[:2]
             parts = data[2:].split(b'\x00')
             if len(parts) < 2:
-                print(f"Malformed WRQ packet from {addr}")
+                display_area.config(state=tk.NORMAL)
+                display_area.insert(tk.END, f"Malformed WRQ packet from {addr}\n")
+                display_area.yview(tk.END)
+                display_area.config(state=tk.DISABLED)
                 continue
             filename = parts[0].decode('ascii')
             mode = parts[1].decode('ascii')
 
-            print(f"Received WRQ: filename={filename}, mode={mode}, from={addr}")
+            display_area.config(state=tk.NORMAL)
+            display_area.insert(tk.END, f"Received WRQ: filename={filename}, mode={mode}, from={addr}\n")
+            display_area.yview(tk.END)
+            display_area.config(state=tk.DISABLED)
 
             if opcode == b'\x00\x02':  # Write request (WRQ)
                 filepath = os.path.join(storage_directory, filename)
@@ -40,7 +48,16 @@ def tftp_server(sock, stop_event, storage_directory="tftp_storage", block_size=5
                     while True:
                         ack = b'\x00\x04' + block_number.to_bytes(2, 'big')
                         sock.sendto(ack, addr)
-                        print(f"Sent ACK for block {block_number} to {addr}")
+                        if first_ack:
+                            first_ack=False
+                        else:
+                            first_ack=True
+                        display_area.config(state=tk.NORMAL)
+                        if first_ack:
+                            display_area.insert(tk.END, f"Sent ACK for block {block_number} to {addr}\n")
+                            display_area.yview(tk.END)
+                            display_area.config(state=tk.DISABLED)
+                            status_bar.config(text=f"Sent ACK for block {block_number} to {addr}")
 
                         try:
                             data, addr = sock.recvfrom(block_size + 4)
@@ -56,35 +73,65 @@ def tftp_server(sock, stop_event, storage_directory="tftp_storage", block_size=5
                         recv_block_number = int.from_bytes(data[2:4], 'big')
                         block_data = data[4:]
 
-                        print(f"Received packet: opcode={opcode}, block_number={recv_block_number}, from={addr}")
+                        display_area.config(state=tk.NORMAL)
+                        #display_area.insert(tk.END, f"Received packet: opcode={opcode}, block_number={recv_block_number}, from={addr}\n")
+                        #display_area.insert(tk.END, f"Received Packet: block number={block_number}, from={addr}\n")
+                        display_area.yview(tk.END)
+                        display_area.config(state=tk.DISABLED)
 
                         if opcode == b'\x00\x03' and recv_block_number == block_number + 1:
                             file.write(block_data)
                             block_number += 1
-                            print(f"Received block {block_number} of {filename} from {addr}")
+                            display_area.config(state=tk.NORMAL)
+                            display_area.insert(tk.END, f"Received block {block_number} of {filename} from {addr}\n")
+                            display_area.yview(tk.END)
+                            display_area.config(state=tk.DISABLED)
+                            status_bar.config(text=f"Received block {block_number} of {filename} from {addr}")
 
                             if len(block_data) < block_size:
-                                print(f"File transfer complete for {filename}")
+                                display_area.config(state=tk.NORMAL)
+                                display_area.insert(tk.END, f"File transfer complete for {filename}\n")
+                                display_area.yview(tk.END)
+                                display_area.config(state=tk.DISABLED)
+                                status_bar.config(text=f"File transfer complete for {filename}")
                                 # Send final ACK
                                 ack = b'\x00\x04' + block_number.to_bytes(2, 'big')
                                 sock.sendto(ack, addr)
-                                print(f"Sent final ACK for block {block_number} to {addr}")
+                                display_area.config(state=tk.NORMAL)
+                                display_area.insert(tk.END, f"Sent final ACK for block {block_number} to {addr}\n")
+                                first_ack = True
+                                display_area.yview(tk.END)
+                                display_area.config(state=tk.DISABLED)
+                                status_bar.config(text=f"Sent final ACK for block {block_number} to {addr} // TFTP Status: Ready")
                                 break
         except socket.timeout:
             continue
         except Exception as e:
-            print(f"Error in TFTP server: {e}")
+            display_area.config(state=tk.NORMAL)
+            display_area.insert(tk.END, f"Error in TFTP server: {e}\n")
+            display_area.yview(tk.END)
+            display_area.config(state=tk.DISABLED)
+            status_bar.config(text=f"Error in TFTP server: {e}")
 
-    print("TFTP server stopping.")
+    display_area.config(state=tk.NORMAL)
+    display_area.insert(tk.END, "TFTP server stopping.\n")
+    display_area.yview(tk.END)
+    display_area.config(state=tk.DISABLED)
+    status_bar.config(text="TFTP server stopping.")
     sock.close()
 
 
 
-def tftp_client(sock, filename, server_address, block_size):
+
+def tftp_client(sock, filename, server_address, display_area, block_size):
+    global status_bar
     try:
         wrq = b'\x00\x02' + os.path.basename(filename).encode('ascii') + b'\x00octet\x00'
         sock.sendto(wrq, server_address)
-        print(f"Sent WRQ for {filename} to {server_address}")
+        display_area.config(state=tk.NORMAL)
+        display_area.insert(tk.END, f"Sent WRQ for {filename} to {server_address}\n")
+        display_area.yview(tk.END)
+        display_area.config(state=tk.DISABLED)
 
         with open(filename, 'rb') as file:
             total_size = 0
@@ -98,34 +145,60 @@ def tftp_client(sock, filename, server_address, block_size):
                 block_number += 1
                 packet = b'\x00\x03' + block_number.to_bytes(2, 'big') + block
                 sock.sendto(packet, server_address)
-                print(f"Sent block {block_number} of {filename} to {server_address}")
+                display_area.config(state=tk.NORMAL)
+                display_area.insert(tk.END, f"Sent block {block_number} of {filename} to {server_address}\n")
+                display_area.yview(tk.END)
+                display_area.config(state=tk.DISABLED)
+                status_bar.config(text=f"Sent block {block_number} of {filename} to {server_address}")
 
                 while True:
                     ack, _ = sock.recvfrom(4)
                     if ack[:2] == b'\x00\x04' and int.from_bytes(ack[2:], 'big') == block_number:
-                        print(f"Received ACK for block {block_number}")
+                        display_area.config(state=tk.NORMAL)
+                        display_area.insert(tk.END, f"Received ACK for block {block_number}\n")
+                        display_area.yview(tk.END)
+                        display_area.config(state=tk.DISABLED)
+                        status_bar.config(text=f"Received ACK for block {block_number}")
                         break
                     else:
-                        print(f"Incorrect ACK received, retransmitting block {block_number}")
+                        display_area.config(state=tk.NORMAL)
+                        display_area.insert(tk.END, f"Incorrect ACK received, retransmitting block {block_number}\n")
+                        display_area.yview(tk.END)
+                        display_area.config(state=tk.DISABLED)
                         sock.sendto(packet, server_address)
+                        status_bar.config(text=f"Incorrect ACK received, retransmitting block {block_number}")
 
             # If the last block is less than the block size, it indicates the end of the file.
             if len(block) == block_size:
                 block_number += 1
                 packet = b'\x00\x03' + block_number.to_bytes(2, 'big') + b''
                 sock.sendto(packet, server_address)
-                print(f"Sent final block {block_number} of {filename} to {server_address}")
+                display_area.config(state=tk.NORMAL)
+                display_area.insert(tk.END, f"Sent final block {block_number} of {filename} to {server_address}\n")
+                display_area.yview(tk.END)
+                display_area.config(state=tk.DISABLED)
 
                 while True:
                     ack, _ = sock.recvfrom(4)
                     if ack[:2] == b'\x00\x04' and int.from_bytes(ack[2:], 'big') == block_number:
-                        print(f"Received final ACK for block {block_number}")
+                        display_area.config(state=tk.NORMAL)
+                        display_area.insert(tk.END, f"Received final ACK for block {block_number}\n")
+                        display_area.yview(tk.END)
+                        display_area.config(state=tk.DISABLED)
                         break
 
             status_bar.config(text="File transfer complete")
-            print(f"File transfer complete for {filename}")
+            display_area.config(state=tk.NORMAL)
+            display_area.insert(tk.END, f"File transfer complete for {filename}\n")
+            display_area.yview(tk.END)
+            display_area.config(state=tk.DISABLED)
+            status_bar.config(text=f"File transfer complete for {filename}")
     except Exception as e:
-        print(f"Error in TFTP client: {e}")
+        display_area.config(state=tk.NORMAL)
+        display_area.insert(tk.END, f"Error in TFTP client: {e}\n")
+        display_area.yview(tk.END)
+        display_area.config(state=tk.DISABLED)
+
 
 def select_file():
     global selected_file_path
@@ -228,7 +301,7 @@ def send_file():
         block_size = int(block_size_dropdown.get())
         status_bar.config(text="Starting file transfer...")
         print(f"Starting file transfer to {server_ip}:{server_port} with block size {block_size}")
-        threading.Thread(target=tftp_client, args=(sock, selected_file_path, (server_ip, server_port), block_size)).start()
+        threading.Thread(target=tftp_client, args=(sock, selected_file_path, (server_ip, server_port), display_area, block_size)).start()
 
 def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, display_area, message_entry, peer_dropdown, save_button, callsign_dropdown, send_button, stop_event):
     global sock
@@ -259,8 +332,15 @@ def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, 
 
     start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown, send_button, ack_timeout, stop_event)
 
+    # Start the TFTP server with the selected block size
+    #block_size = int(block_size_dropdown.get())
+    #tftp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #tftp_sock.bind(('0.0.0.0', 69))
+    #threading.Thread(target=tftp_server, args=(tftp_sock, stop_event, display_area, "tftp_storage", block_size)).start()
+
     # Ensure sock is passed to on_closing
     root.protocol("WM_DELETE_WINDOW", lambda: on_closing(root, sock, stop_event))
+
 
 def start_stop_tftp_server():
     global tftp_sock, tftp_server_thread, stop_event, tftp_on
@@ -269,7 +349,7 @@ def start_stop_tftp_server():
         tftp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         tftp_sock.bind(('0.0.0.0', 69))
         stop_event.clear()
-        tftp_server_thread = threading.Thread(target=tftp_server, args=(tftp_sock, stop_event, "tftp_storage", block_size))
+        tftp_server_thread = threading.Thread(target=tftp_server, args=(tftp_sock, stop_event, display_area, "tftp_storage", block_size))
         tftp_server_thread.start()
         status_bar.config(text=f"Status: TFTP Server Running // Block Size = {block_size}")
         block_size_dropdown.config(state=tk.DISABLED)
