@@ -8,19 +8,23 @@ import os
 
 selected_file_path = ""
 
-def tftp_server(sock, storage_directory="tftp_storage"):
+def tftp_server(sock, storage_directory="tftp_storage", block_size=512):
     if not os.path.exists(storage_directory):
         os.makedirs(storage_directory)
 
     while True:
         try:
-            data, addr = sock.recvfrom(516)  # TFTP packets are 512 bytes of data + 4 bytes header
+            data, addr = sock.recvfrom(block_size + 4)  # TFTP packets are block_size of data + 4 bytes header
             if not data:
                 break
 
             opcode = data[:2]
-            filename = data[2:].split(b'\x00')[0].decode('ascii')
-            mode = data[2 + len(filename) + 1:].split(b'\x00')[0].decode('ascii')
+            parts = data[2:].split(b'\x00')
+            if len(parts) < 2:
+                print(f"Malformed WRQ packet from {addr}")
+                continue
+            filename = parts[0].decode('ascii')
+            mode = parts[1].decode('ascii')
 
             print(f"Received WRQ: filename={filename}, mode={mode}, from={addr}")
 
@@ -33,7 +37,7 @@ def tftp_server(sock, storage_directory="tftp_storage"):
                         sock.sendto(ack, addr)
                         print(f"Sent ACK for block {block_number} to {addr}")
 
-                        data, addr = sock.recvfrom(516)
+                        data, addr = sock.recvfrom(block_size + 4)
                         if not data:
                             break
 
@@ -48,7 +52,7 @@ def tftp_server(sock, storage_directory="tftp_storage"):
                             block_number += 1
                             print(f"Received block {block_number} of {filename} from {addr}")
 
-                            if len(block_data) < 512:
+                            if len(block_data) < block_size:
                                 print(f"File transfer complete for {filename}")
                                 # Send final ACK
                                 ack = b'\x00\x04' + block_number.to_bytes(2, 'big')
@@ -59,8 +63,7 @@ def tftp_server(sock, storage_directory="tftp_storage"):
             print(f"Error in TFTP server: {e}")
 
 
-
-def tftp_client(sock, filename, server_address, block_size=512):
+def tftp_client(sock, filename, server_address, block_size):
     try:
         wrq = b'\x00\x02' + os.path.basename(filename).encode('ascii') + b'\x00octet\x00'
         sock.sendto(wrq, server_address)
@@ -107,23 +110,12 @@ def tftp_client(sock, filename, server_address, block_size=512):
     except Exception as e:
         print(f"Error in TFTP client: {e}")
 
-
-
 def select_file():
     global selected_file_path
     selected_file_path = filedialog.askopenfilename()
     status_bar.config(text=f"Selected file: {selected_file_path}")
     print(f"Selected file: {selected_file_path}")
     return selected_file_path
-
-def send_file():
-    if selected_file_path:
-        server_ip = peer_info[peer_dropdown.current()][0]
-        server_port = 69
-        block_size = int(block_size_dropdown.get())
-        status_bar.config(text="Starting file transfer...")
-        print(f"Starting file transfer to {server_ip}:{server_port} with block size {block_size}")
-        threading.Thread(target=tftp_client, args=(sock, selected_file_path, (server_ip, server_port), block_size)).start()
 
 def receive_messages(sock, display_area, ack_received_event, stop_event):
     while not stop_event.is_set():
@@ -211,6 +203,16 @@ def start_peer(sock, local_callsign, peer_info, display_area, message_entry, pee
     send_button.config(command=send_button_command)
     message_entry.bind('<Return>', send_button_command)
 
+
+def send_file():
+    if selected_file_path:
+        server_ip = peer_info[peer_dropdown.current()][0]
+        server_port = 69
+        block_size = int(block_size_dropdown.get())
+        status_bar.config(text="Starting file transfer...")
+        print(f"Starting file transfer to {server_ip}:{server_port} with block size {block_size}")
+        threading.Thread(target=tftp_client, args=(sock, selected_file_path, (server_ip, server_port), block_size)).start()
+
 def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, display_area, message_entry, peer_dropdown, save_button, callsign_dropdown, send_button, stop_event):
     global sock
     selected_value = local_callsign_var.get()
@@ -240,10 +242,11 @@ def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, 
 
     start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown, send_button, ack_timeout, stop_event)
 
-    # Start the TFTP server
+    # Start the TFTP server with the selected block size
+    block_size = int(block_size_dropdown.get())
     tftp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     tftp_sock.bind(('0.0.0.0', 69))
-    threading.Thread(target=tftp_server, args=(tftp_sock,)).start()
+    threading.Thread(target=tftp_server, args=(tftp_sock, "tftp_storage", block_size)).start()
 
     # Ensure sock is passed to on_closing
     root.protocol("WM_DELETE_WINDOW", lambda: on_closing(root, sock, stop_event))
