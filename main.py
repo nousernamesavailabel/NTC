@@ -7,16 +7,21 @@ import time
 import os
 
 selected_file_path = ""
+tftp_on = False
+stop_event = threading.Event()
 
-def tftp_server(sock, storage_directory="tftp_storage", block_size=512):
+
+def tftp_server(sock, stop_event, storage_directory="tftp_storage", block_size=512):
     if not os.path.exists(storage_directory):
         os.makedirs(storage_directory)
 
-    while True:
+    sock.settimeout(1.0)  # Set a timeout for the socket operations
+
+    while not stop_event.is_set():
         try:
             data, addr = sock.recvfrom(block_size + 4)  # TFTP packets are block_size of data + 4 bytes header
             if not data:
-                break
+                continue
 
             opcode = data[:2]
             parts = data[2:].split(b'\x00')
@@ -37,7 +42,13 @@ def tftp_server(sock, storage_directory="tftp_storage", block_size=512):
                         sock.sendto(ack, addr)
                         print(f"Sent ACK for block {block_number} to {addr}")
 
-                        data, addr = sock.recvfrom(block_size + 4)
+                        try:
+                            data, addr = sock.recvfrom(block_size + 4)
+                        except socket.timeout:
+                            if stop_event.is_set():
+                                break
+                            continue
+
                         if not data:
                             break
 
@@ -59,8 +70,14 @@ def tftp_server(sock, storage_directory="tftp_storage", block_size=512):
                                 sock.sendto(ack, addr)
                                 print(f"Sent final ACK for block {block_number} to {addr}")
                                 break
+        except socket.timeout:
+            continue
         except Exception as e:
             print(f"Error in TFTP server: {e}")
+
+    print("TFTP server stopping.")
+    sock.close()
+
 
 
 def tftp_client(sock, filename, server_address, block_size):
@@ -242,14 +259,30 @@ def on_save(local_callsign_var, local_port_entry, ack_timeout_entry, peer_info, 
 
     start_peer(sock, local_callsign, peer_info, display_area, message_entry, peer_dropdown, send_button, ack_timeout, stop_event)
 
-    # Start the TFTP server with the selected block size
-    block_size = int(block_size_dropdown.get())
-    tftp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    tftp_sock.bind(('0.0.0.0', 69))
-    threading.Thread(target=tftp_server, args=(tftp_sock, "tftp_storage", block_size)).start()
-
     # Ensure sock is passed to on_closing
     root.protocol("WM_DELETE_WINDOW", lambda: on_closing(root, sock, stop_event))
+
+def start_stop_tftp_server():
+    global tftp_sock, tftp_server_thread, stop_event, tftp_on
+    if not tftp_on:
+        block_size = int(block_size_dropdown.get())
+        tftp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        tftp_sock.bind(('0.0.0.0', 69))
+        stop_event.clear()
+        tftp_server_thread = threading.Thread(target=tftp_server, args=(tftp_sock, stop_event, "tftp_storage", block_size))
+        tftp_server_thread.start()
+        status_bar.config(text=f"Status: TFTP Server Running // Block Size = {block_size}")
+        block_size_dropdown.config(state=tk.DISABLED)
+        start_tftp_server_button.config(text="Stop TFTP Server")
+        tftp_on = True
+    else:
+        stop_event.set()
+        tftp_server_thread.join()
+        status_bar.config(text="Status: TFTP Server Stopped")
+        start_tftp_server_button.config(text="Start TFTP Server")
+        block_size_dropdown.config(state=tk.NORMAL)
+        tftp_on = False
+
 
 def read_addresses(file_name):
     peer_info = []
@@ -323,31 +356,34 @@ if __name__ == "__main__":
     frame = tk.Frame(root)
     frame.grid(row=2, column=0, padx=10, pady=10, columnspan=7, sticky="ew")
 
-    message_entry = tk.Entry(frame, width=50)
-    message_entry.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+    message_entry = tk.Entry(frame)
+    message_entry.grid(row=0, column=0, padx=5, pady=5, sticky="ew", columnspan=5)
 
     peer_dropdown = ttk.Combobox(frame, state="readonly", width=25)
     peer_dropdown['values'] = [f"{callsign} ({address}:{port})" for address, port, callsign in peer_info]
     peer_dropdown.current(0)
-    peer_dropdown.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+    peer_dropdown.grid(row=0, column=6, padx=5, pady=5, sticky="ew")
 
     send_button = tk.Button(frame, text="Send", command=None)
-    send_button.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+    send_button.grid(row=0, column=7, padx=5, pady=5, sticky="ew")
 
     select_file_button = tk.Button(frame, text="Select File", command=select_file)
-    select_file_button.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
+    select_file_button.grid(row=1, column=3, padx=5, pady=5, sticky="ew")
 
     send_file_button = tk.Button(frame, text="Send File", command=send_file)
-    send_file_button.grid(row=1, column=3, padx=5, pady=5, sticky="ew")
+    send_file_button.grid(row=1, column=4, padx=5, pady=5, sticky="ew")
 
     block_size_label = tk.Label(frame, text="Block Size:")
-    block_size_label.grid(row=1, column=4, padx=10, pady=10)
+    block_size_label.grid(row=1, column=0, padx=10, pady=10)
 
     block_size_dropdown = ttk.Combobox(frame, state="readonly", values=[16, 32, 64, 128, 256, 512, 1024, 2048, 4096])
     block_size_dropdown.current(5)
-    block_size_dropdown.grid(row=1, column=5, padx=5, pady=5, sticky="ew")
+    block_size_dropdown.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
 
-    status_bar = tk.Label(root, text="Status: Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+    start_tftp_server_button = tk.Button(frame, text="Start TFTP Server", command=start_stop_tftp_server)
+    start_tftp_server_button.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
+
+    status_bar = tk.Label(root, text="Status: TFTP Server Not Started", bd=1, relief=tk.SUNKEN, anchor=tk.W)
     status_bar.grid(row=3, column=0, columnspan=7, padx=5, pady=5, sticky="ew")
 
     root.grid_rowconfigure(1, weight=1)
