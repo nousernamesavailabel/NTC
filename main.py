@@ -11,6 +11,8 @@ tftp_on = False
 stop_event = threading.Event()
 first_ack = True
 
+version = "1.0.0"
+
 
 def tftp_server(sock, stop_event, display_area, storage_directory="tftp_storage", block_size=512):
     global first_ack
