@@ -113,11 +113,11 @@ def tftp_server(sock, stop_event, display_area, storage_directory="tftp_storage"
             display_area.config(state=tk.DISABLED)
             status_bar.config(text=f"Error in TFTP server: {e}")
 
-    display_area.config(state=tk.NORMAL)
-    display_area.insert(tk.END, "TFTP server stopping.\n")
-    display_area.yview(tk.END)
-    display_area.config(state=tk.DISABLED)
-    status_bar.config(text="TFTP server stopping.")
+    #display_area.config(state=tk.NORMAL)
+    #display_area.insert(tk.END, "TFTP server stopping.\n")
+    #display_area.yview(tk.END)
+    #display_area.config(state=tk.DISABLED)
+    status_bar.config(text="TFTP server stopped.")
     sock.close()
 
 
@@ -357,11 +357,13 @@ def start_stop_tftp_server():
         tftp_on = True
     else:
         stop_event.set()
-        tftp_server_thread.join()
+        tftp_server_thread.join(1)  # Non-blocking join
+        tftp_sock.close()
         status_bar.config(text="Status: TFTP Server Stopped")
         start_tftp_server_button.config(text="Start TFTP Server")
         block_size_dropdown.config(state=tk.NORMAL)
         tftp_on = False
+
 
 
 def read_addresses(file_name):
